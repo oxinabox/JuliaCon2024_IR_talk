@@ -1,4 +1,23 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
+		<title>reveal.js</title>
+
+		<link rel="stylesheet" href="dist/reset.css">
+		<link rel="stylesheet" href="dist/reveal.css">
+		<link rel="stylesheet" href="dist/theme/black.css">
+
+		<!-- Theme used for syntax highlighted code -->
+		<link rel="stylesheet" href="plugin/highlight/monokai.css">
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+				<section data-markdown>
+					<textarea data-template>
 # Adventures in IR: Plundering Core.Compiler
 
 Dr Frames White (she/her)
@@ -18,7 +37,7 @@ Much less remote than Boston.
 
 This is about writing custom optimization passes that work using the tools that are built into the compiler itself.
 
-Incontrast to say IRTools.jl which reimplements analysis and motification utilities itself
+In contrast to say IRTools.jl which reimplements analysis and modification utilities itself
 
 It one key part of DAECompiler.jl which is used in Cedar,
 and behind Diffractor's demand driven forwards mode AD.
@@ -28,13 +47,13 @@ It's also used for Will Tebbut's Tapir.jl reverse mode AD.
 
 ## 💡 Why would I want to do this?
 
- - Run different optimization pipeline 
-    - Disable inlining
-    - Allow union splitting with more than 4 elements in the union
-    - etc.
- - Generate multiple functions from 1 definition
-    - DAECompile generates about a dozen different functions like Jacobians and callbacks from a single function definition.
-    - This kinda thing generally requires custom intrinsics.
+- Run different optimization pipeline 
+	- Disable inlining
+	- Allow union splitting with more than 4 elements in the union
+	- etc.
+- Generate multiple functions from 1 definition
+	- DAECompile generates about a dozen different functions like Jacobians and callbacks from a single function definition.
+	- This kinda thing generally requires custom intrinsics.
 
 ---
 
@@ -71,19 +90,19 @@ And some (like `getindex(::IRCode, ::SSAValue)` after ulia v1.11.0-DEV.258) are 
 ---
 
 ## 🪠 The compiler pipeline
-You are likely familar with the compilation pipeline of:
+You are likely familiar with the compilation pipeline of:
 
 1. Source code
 2. Parsing -> AST
-     - Macros run here
+	- Macros run here
 3. Lowering -> Untyped IR
-     - Cassette, Zygote and JuliaInterpetter run here
+	- Cassette, Zygote and JuliaInterpetter run here
 4. Type Inference -> Typed IR 
-     - loop here running julia optimization passes
-     - This stage is what this talk is about
+	- loop here running julia optimization passes
+	- This stage is what this talk is about
 5. Code Generation -> LLVM IR
-     - loop here running LLVM optimization passes
-     - Enzyme, and GPU Compiler run here.
+	- loop here running LLVM optimization passes
+	- Enzyme, and GPU Compiler run here.
 6. Assembling -> Machine Code
 
 ---
@@ -149,9 +168,9 @@ foo (generic function with 1 method)
 
 julia> Base.code_ircode(foo, Tuple{})
 1 1 ─ %1 = invoke Main.rand()::Float64                │ 
-  │   %2 = Base.mul_float(2.0, %1)::Float64           │╻ *
-  └──      return %2                                  │ 
-   => Float64                                           
+	│   %2 = Base.mul_float(2.0, %1)::Float64           │╻ *
+	└──      return %2                                  │ 
+	=> Float64                                           
 ```
 
 ---
@@ -165,8 +184,8 @@ Functionally they are much like `SSAValue`s but without instructions assoicated 
 ```julia
 julia> Base.code_ircode(+, (Int, Int),) |> only
 87 1 ─ %1 = Base.add_int(_2, _3)::Int64                  │
-   └──      return %1                                    │
-    => Int64           
+	└──      return %1                                    │
+	=> Int64           
 ```
 
 ---
@@ -176,8 +195,8 @@ julia> Base.code_ircode(+, (Int, Int),) |> only
 You are familar with `Expr(:call, f, args...)` from the AST.
 But in the `IRCode` we also have `Expr(:invoke, method_instance, f, args...)`
 
- - Call is used for dynamic dispatches
- - Invoke is used for static dispatches
+	- Call is used for dynamic dispatches
+	- Invoke is used for static dispatches
 
 Running type inference will replace type-known calls with invokes.
 
@@ -191,22 +210,22 @@ These are basic blocks
 
 ```julia
 julia> function qux()
-       x=0.0
-       if (@noinline rand(Bool))
-           x += 10(@noinline rand())
-       end
-       return x
-       end;
+		x=0.0
+		if (@noinline rand(Bool))
+			x += 10(@noinline rand())
+		end
+		return x
+		end;
 
 julia> Base.code_ircode(qux) |> first
 3 1 ─ %1 = invoke Main.rand(Main.Bool::Type{Bool})::Bool            │ 
-  └──      goto #3 if not %1                                        │ 
+	└──      goto #3 if not %1                                        │ 
 4 2 ─ %3 = invoke Main.rand()::Float64                              │ 
-  │   %4 = Base.mul_float(10.0, %3)::Float64                        │╻ *
-  └── %5 = Base.add_float(0.0, %4)::Float64                         │╻ +
+	│   %4 = Base.mul_float(10.0, %3)::Float64                        │╻ *
+	└── %5 = Base.add_float(0.0, %4)::Float64                         │╻ +
 6 3 ┄ %6 = φ (#2 => %5, #1 => 0.0)::Float64                         │ 
-  └──      return %6                                                │ 
-   => Float64 
+	└──      return %6                                                │ 
+	=> Float64 
 ```
 
 ## Control Flow Graph (CFG)
@@ -215,25 +234,25 @@ We can extract the possible paths through the basic blocks as a graph.
 ```julia
 julia> ir.cfg
 CFG with 3 blocks:
-  bb 1 (stmts 1:2) → bb 3, 2
-  bb 2 (stmts 3:5) → bb 3
-  bb 3 (stmts 6:7)
+	bb 1 (stmts 1:2) → bb 3, 2
+	bb 2 (stmts 3:5) → bb 3
+	bb 3 (stmts 6:7)
 
 julia> ir.cfg.blocks[2].stmts
 3-element Core.Compiler.StmtRange:
- 3
- 4
- 5
+	3
+	4
+	5
 
 julia> ir.cfg.blocks[2].preds
 1-element Vector{Int64}:
- 1
+	1
 
 julia> ir.cfg.blocks[2].succs
 1-element Vector{Int64}:
- 3
+	3
 ```
- **TODO: use IRViz.jl here?**
+	**TODO: use IRViz.jl here?**
 
 ---
 
@@ -246,10 +265,10 @@ For example
 ```
 
 says to set `%33` to:
- - `%8` if we came from `#2`
- - `%17` if we came from `#4`
- - `%26` if we came from `#6`
- - `%31` if we came from `#8`
+	- `%8` if we came from `#2`
+	- `%17` if we came from `#4`
+	- `%26` if we came from `#6`
+	- `%31` if we came from `#8`
 
 They are weird little time-reversed friends.
 Almost opposite of a `goto` -- `if_came_from`.
@@ -266,28 +285,28 @@ For example they are inserted during union-splitting
 julia> int32_or_float32() = rand((rand() > 0.5 ? Int32 : Float32));
 
 julia> function bar()
-       a = @noinline int32_or_float32()
-       return a + a
-       end;
+		a = @noinline int32_or_float32()
+		return a + a
+		end;
 
 julia> Base.code_ircode(bar) |> only
 2 1 ─ %1  = invoke Main.int32_or_float32()::Union{Float32, Int32}
 3 │   %2  = (isa)(%1, Float32)::Bool                     │     
-  │   %3  = (isa)(%1, Float32)::Bool                     │     
-  │   %4  = (Core.Intrinsics.and_int)(%2, %3)::Bool      │     
-  └──       goto #3 if not %4                            │     
-  2 ─ %6  = π (%1, Float32)                              │     
-  │   %7  = π (%1, Float32)                              │     
-  │   %8  = Base.add_float(%6, %7)::Float32              │╻     +
-  └──       goto #9                                      │     
-  3 ─ ...     
-  8 ─ %29 = π (%1, Int32)                                │     
-  │   %30 = π (%1, Int32)                                │     
-  │   %31 = Base.add_int(%29, %30)::Int32                │╻     +
-  └──       goto #9                                      │     
-  9 ┄ %33 = φ (#2 => %8, #4 => %17, #6 => %26, #8 => %31)::Union{Filoat32, Int32}
-  └──       return %33                                   │     
-   => Union{Float32, Int32}                                    
+	│   %3  = (isa)(%1, Float32)::Bool                     │     
+	│   %4  = (Core.Intrinsics.and_int)(%2, %3)::Bool      │     
+	└──       goto #3 if not %4                            │     
+	2 ─ %6  = π (%1, Float32)                              │     
+	│   %7  = π (%1, Float32)                              │     
+	│   %8  = Base.add_float(%6, %7)::Float32              │╻     +
+	└──       goto #9                                      │     
+	3 ─ ...     
+	8 ─ %29 = π (%1, Int32)                                │     
+	│   %30 = π (%1, Int32)                                │     
+	│   %31 = Base.add_int(%29, %30)::Int32                │╻     +
+	└──       goto #9                                      │     
+	9 ┄ %33 = φ (#2 => %8, #4 => %17, #6 => %26, #8 => %31)::Union{Filoat32, Int32}
+	└──       return %33                                   │     
+	=> Union{Float32, Int32}                                    
 ```
 
 ---
@@ -357,7 +376,25 @@ e.g. via inlining and seeing it is effect free.
 
 **TODO** copy example from DAECompiler
 
+					</textarea>
+				</section>
+			</div>
+		</div>
 
+		<script src="dist/reveal.js"></script>
+		<script src="plugin/notes/notes.js"></script>
+		<script src="plugin/markdown/markdown.js"></script>
+		<script src="plugin/highlight/highlight.js"></script>
+		<script>
+			// More info about initialization & config:
+			// - https://revealjs.com/initialization/
+			// - https://revealjs.com/config/
+			Reveal.initialize({
+				hash: true,
 
-
-
+				// Learn about plugins: https://revealjs.com/plugins/
+				plugins: [ RevealMarkdown, RevealHighlight, RevealNotes ]
+			});
+		</script>
+	</body>
+</html>
