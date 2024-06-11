@@ -12,6 +12,19 @@
 
 		<!-- Theme used for syntax highlighted code -->
 		<link rel="stylesheet" href="plugin/highlight/monokai.css">
+
+		<style type="text/css">
+			p { text-align: left; }
+
+			pre {
+				width: unset !important;
+			}
+			.reveal pre code {
+				max-height: unset !important;
+				overflow: visible;
+			}
+		</style>
+
 	</head>
 	<body>
 		<div class="reveal">
@@ -50,7 +63,6 @@ It's also used for Will Tebbut's Tapir.jl reverse mode AD.
 - Run different optimization pipeline 
 	- Disable inlining
 	- Allow union splitting with more than 4 elements in the union
-	- etc.
 - Generate multiple functions from 1 definition
 	- DAECompile generates about a dozen different functions like Jacobians and callbacks from a single function definition.
 	- This kinda thing generally requires custom intrinsics.
@@ -80,12 +92,17 @@ But the general content and conception of this talk should remain useful.
 
 ## A lot of the utilities are not in the Base namespace
 When you do `for` that lowers to calls to `iterate` in the current namespace.
-Similar for `getindex` and `setindex`, and indexing with begin and end.
+Similar for `getindex` and `setindex`, and indexing with `begin` and `end`.
 But `Core` is a different namespace to `Base`.
 So some things are broken if you are using from normal julia code which is in main with Base exporting them.
 But you can do a manual method merge across the namespaces.
-And some (like `getindex(::IRCode, ::SSAValue)` after ulia v1.11.0-DEV.258) are already defined.
+And some (like `getindex(::IRCode, ::SSAValue)` after Julia v1.11.0-DEV.258) are already defined.
 
+For example:
+```julia
+const CC = Core.Compiler
+Base.lastindex(x::CC.InstructionStream) = CC.length(x)
+```
 
 ---
 
@@ -129,6 +146,7 @@ and what almost all Julia's own optimization passes are running on.
 We can think of IR code as a list of instructions.
 
 For the `ii`th instruction we have:
+
 ```julia
 ir[SSAValue(ii)][:stmt]  # The expression
 ir[SSAValue(ii)][:typ]   # the lattices (including type lattice)
@@ -148,21 +166,21 @@ It can only contain `SSAValue`s, `Argument`s and literals.
 
 
 **No:**
-```
+```llvm
 %1 = foo(2*2)
 ```
 **Yes:**
-```
+```llvm
 %1 = 2*2
 %2 = foo(%1)
 ```
-
+---
 
 ## SSAValues
 An `SSAValue` is the value of a single statement..
 Written `%1`, `%2` etc
 
-```julia
+```julia-repl
 julia> foo() = 2 * (@noinline rand())
 foo (generic function with 1 method)
 
@@ -181,7 +199,7 @@ Functionally they are much like `SSAValue`s but without instructions assoicated 
 `_1` is the function object itself, so its first argument is `_2`
 
 
-```julia
+```julia-repl
 julia> Base.code_ircode(+, (Int, Int),) |> only
 87 1 ─ %1 = Base.add_int(_2, _3)::Int64                  │
 	└──      return %1                                    │
@@ -195,8 +213,8 @@ julia> Base.code_ircode(+, (Int, Int),) |> only
 You are familar with `Expr(:call, f, args...)` from the AST.
 But in the `IRCode` we also have `Expr(:invoke, method_instance, f, args...)`
 
-	- Call is used for dynamic dispatches
-	- Invoke is used for static dispatches
+- Call is used for dynamic dispatches
+- Invoke is used for static dispatches
 
 Running type inference will replace type-known calls with invokes.
 
@@ -208,7 +226,7 @@ It remove `if-else`, `for`, `while` replacing them with `goto`s and `goto if not
 However, structure still remains: you run a block of code before hiting a point that you can jump to.
 These are basic blocks
 
-```julia
+```julia-repl
 julia> function qux()
 		x=0.0
 		if (@noinline rand(Bool))
@@ -228,10 +246,12 @@ julia> Base.code_ircode(qux) |> first
 	=> Float64 
 ```
 
+---
+
 ## Control Flow Graph (CFG)
 We can extract the possible paths through the basic blocks as a graph.
 
-```julia
+```julia-repl
 julia> ir.cfg
 CFG with 3 blocks:
 	bb 1 (stmts 1:2) → bb 3, 2
@@ -281,7 +301,7 @@ They are facts that are certain to be true, so the compiler can use them.
 They are often inserted by type assertions or banching on types, etc.
 For example they are inserted during union-splitting
 
-```julia
+```julia=-repl
 julia> int32_or_float32() = rand((rand() > 0.5 ? Int32 : Float32));
 
 julia> function bar()
@@ -369,6 +389,8 @@ For our purpose a custom intrinsic is something that
 Keno and Shuhei's talk should cover this in more detail.
 Since a major use of custom intrinsics is to push things into a custom latice during abstract interpretation.
 
+---
+
 ## How do I define a custom intrinsic?
 We can simply use a function that does nothing.
 We just need to ensure that no earlier optimize pass removes it,
@@ -391,6 +413,9 @@ e.g. via inlining and seeing it is effect free.
 			// - https://revealjs.com/config/
 			Reveal.initialize({
 				hash: true,
+				margin: 0.1,
+//				width: '90%',
+				height: '50%',
 
 				// Learn about plugins: https://revealjs.com/plugins/
 				plugins: [ RevealMarkdown, RevealHighlight, RevealNotes ]
