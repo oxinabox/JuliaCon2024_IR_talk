@@ -9,52 +9,68 @@ JuliaHub
 
 ## This conference is much easier to get to than on in the US
 Only 20 hours in transit,
-not 40.
+not 40 hours.
+Much less remote than Boston.
 
 ---
 
-## What is this talk?
+## 💬 What is this talk?
 
-This is about writing custom omptimization passes that work using the tools that are built into the compiler itself.
+This is about writing custom optimization passes that work using the tools that are built into the compiler itself.
 
 Incontrast to say IRTools.jl which reimplements analysis and motification utilities itself
 
-It is the core behind DAECompiler used in Cedar,
-and behind Diffractor's demand driven AD.
+It one key part of DAECompiler.jl which is used in Cedar,
+and behind Diffractor's demand driven forwards mode AD.
 It's also used for Will Tebbut's Tapir.jl reverse mode AD.
 
 ---
 
-## A warning: this is unstable internals
-
-This is so far away from a public API.
-We are in the deep intercontinential ocean.
-The light of god can not reach you here.
-
-If see Valentin Churavy's talk for some parts of stablizing some of this.
-But it will likely remain not fully public.
-
-In particular, the trick of giving typed IR to an OpaqueCloure is likely to change.
-It's not what they were really made for, it just happens to be convienent.
-
-But the general content and conception of this talk should remain useful.
-
-
----
-
-## Why would I want to do this?
+## 💡 Why would I want to do this?
 
  - Run different optimization pipeline 
     - Disable inlining
     - Allow union splitting with more than 4 elements in the union
     - etc.
  - Generate multiple functions from 1 definition
-    - DAECompile generates about a dozen different things like Jacobians and callbacks from a signle function definition.
+    - DAECompile generates about a dozen different functions like Jacobians and callbacks from a single function definition.
     - This kinda thing generally requires custom intrinsics.
- 
+
 ---
 
-## The compiler pipeline
+## ⚠ A warning: this is unstable internals
+
+This is so far away from a public API.
+We are in the deep intercontinential ocean.
+The light of god can not reach you here.
+
+
+See Valentin Churavy's talk for some parts of stablizing some of this.
+But it will likely remain not fully public.
+
+Various bits of it change fairly often.
+I suggest looking in Diffractor's source for the various version branches.
+This talk is with reference to v1.12.0-DEV.469.
+
+In particular, the trick of giving typed IR to an OpaqueCloure is likely to change.
+It's not what they were really made for, it just happens to be convienent.
+
+But the general content and conception of this talk should remain useful.
+
+---
+
+## A lot of the utilities are not in the Base namespace
+When you do `for` that lowers to calls to `iterate` in the current namespace.
+Similar for `getindex` and `setindex`, and indexing with begin and end.
+But `Core` is a different namespace to `Base`.
+So some things are broken if you are using from normal julia code which is in main with Base exporting them.
+But you can do a manual method merge across the namespaces.
+And some (like `getindex(::IRCode, ::SSAValue)` after ulia v1.11.0-DEV.258) are already defined.
+
+
+---
+
+## 🪠 The compiler pipeline
 You are likely familar with the compilation pipeline of:
 
 1. Source code
@@ -72,7 +88,7 @@ You are likely familar with the compilation pipeline of:
 
 ---
 
-## Let's soom in on step 4: the Typed IR
+## Let's zoom-in on step 4: the Typed IR
 If you have used `@code_typed` you get back typed IR, as a `CodeInfo` object.
 It's not quiet SSA because it has slots (basically variables).
 
@@ -86,23 +102,262 @@ and what almost all Julia's own optimization passes are running on.
 
 ---
 
-## How do I get instructions out of a `IRCode`
+# Parts
+
+---
+
+## Instrucions
+We can think of IR code as a list of instructions.
+
+For the `ii`th instruction we have:
+```julia
+ir[SSAValue(ii)][:stmt]  # The expression
+ir[SSAValue(ii)][:typ]   # the lattices (including type lattice)
+ir[SSAValue(ii)][:flag] # flags
+# + some other stuff
+```
+
+the `:stmt` can hold a `Expr`, a `SSAValue`, an `Argument` or a literal
+
+---
+
+## Expr
+Broadly speaking inside SSA IR an Expr is not so different from in the AST.
+But it is restricted.
+Most significantly it can't be nested, as it is **Single Statement** Assigment.
+It can only contain `SSAValue`s, `Argument`s and literals.
+
+
+**No:**
+```
+%1 = foo(2*2)
+```
+**Yes:**
+```
+%1 = 2*2
+%2 = foo(%1)
+```
+
+
+## SSAValues
+An `SSAValue` is the value of a single statement..
+Written `%1`, `%2` etc
 
 ```julia
-if VERSION < v"1.11.0-DEV.258"
-    Base.getindex(ir::IRCode, ssa::SSAValue) = CC.getindex(ir, ssa)
-end
+julia> foo() = 2 * (@noinline rand())
+foo (generic function with 1 method)
+
+julia> Base.code_ircode(foo, Tuple{})
+1 1 ─ %1 = invoke Main.rand()::Float64                │ 
+  │   %2 = Base.mul_float(2.0, %1)::Float64           │╻ *
+  └──      return %2                                  │ 
+   => Float64                                           
 ```
 
 ---
-## A lot of the utilities are not in the Base namespace
-When you do `for` that lowers to calls to `iterate` in the current namespace.
-Similar for `getindex` and `setindex` (and several other special forms).
-But `Core` is a different namespace to `Base`.
-So some things are broken if you are using from normal julia code which is in main with Base exporting them.
-But you can do a manual method merge across the namespaces.
+
+## Arguments
+An `Argument`, written `_1`, `_2`,`_3` etc represent the arguments to the functions.
+Functionally they are much like `SSAValue`s but without instructions assoicated with them
+`_1` is the function object itself, so its first argument is `_2`
+
+
+```julia
+julia> Base.code_ircode(+, (Int, Int),) |> only
+87 1 ─ %1 = Base.add_int(_2, _3)::Int64                  │
+   └──      return %1                                    │
+    => Int64           
+```
+
+---
+
+## Invokes and Calls
+
+You are familar with `Expr(:call, f, args...)` from the AST.
+But in the `IRCode` we also have `Expr(:invoke, method_instance, f, args...)`
+
+ - Call is used for dynamic dispatches
+ - Invoke is used for static dispatches
+
+Running type inference will replace type-known calls with invokes.
+
+---
+
+## Basic blocks
+Lowering turns ASTs into flat structures.
+It remove `if-else`, `for`, `while` replacing them with `goto`s and `goto if not`s.
+However, structure still remains: you run a block of code before hiting a point that you can jump to.
+These are basic blocks
+
+```julia
+julia> function qux()
+       x=0.0
+       if (@noinline rand(Bool))
+           x += 10(@noinline rand())
+       end
+       return x
+       end;
+
+julia> Base.code_ircode(qux) |> first
+3 1 ─ %1 = invoke Main.rand(Main.Bool::Type{Bool})::Bool            │ 
+  └──      goto #3 if not %1                                        │ 
+4 2 ─ %3 = invoke Main.rand()::Float64                              │ 
+  │   %4 = Base.mul_float(10.0, %3)::Float64                        │╻ *
+  └── %5 = Base.add_float(0.0, %4)::Float64                         │╻ +
+6 3 ┄ %6 = φ (#2 => %5, #1 => 0.0)::Float64                         │ 
+  └──      return %6                                                │ 
+   => Float64 
+```
+
+## Control Flow Graph (CFG)
+We can extract the possible paths through the basic blocks as a graph.
+
+```julia
+julia> ir.cfg
+CFG with 3 blocks:
+  bb 1 (stmts 1:2) → bb 3, 2
+  bb 2 (stmts 3:5) → bb 3
+  bb 3 (stmts 6:7)
+
+julia> ir.cfg.blocks[2].stmts
+3-element Core.Compiler.StmtRange:
+ 3
+ 4
+ 5
+
+julia> ir.cfg.blocks[2].preds
+1-element Vector{Int64}:
+ 1
+
+julia> ir.cfg.blocks[2].succs
+1-element Vector{Int64}:
+ 3
+```
+ **TODO: use IRViz.jl here?**
+
+---
+
+## Phi nodes
+Phi nodes are kinda like `ifelse` statements, but they know which basic block was just left.
+
+For example
+```julia
+%33 = φ (#2 => %8, #4 => %17, #6 => %26, #8 => %31)::Union{Float32, Int32}
+```
+
+says to set `%33` to:
+ - `%8` if we came from `#2`
+ - `%17` if we came from `#4`
+ - `%26` if we came from `#6`
+ - `%31` if we came from `#8`
+
+They are weird little time-reversed friends.
+Almost opposite of a `goto` -- `if_came_from`.
+
+---
+
+## Pi nodes
+These are like type-assertions.
+They are facts that are certain to be true, so the compiler can use them.
+They are often inserted by type assertions or banching on types, etc.
+For example they are inserted during union-splitting
+
+```julia
+julia> int32_or_float32() = rand((rand() > 0.5 ? Int32 : Float32));
+
+julia> function bar()
+       a = @noinline int32_or_float32()
+       return a + a
+       end;
+
+julia> Base.code_ircode(bar) |> only
+2 1 ─ %1  = invoke Main.int32_or_float32()::Union{Float32, Int32}
+3 │   %2  = (isa)(%1, Float32)::Bool                     │     
+  │   %3  = (isa)(%1, Float32)::Bool                     │     
+  │   %4  = (Core.Intrinsics.and_int)(%2, %3)::Bool      │     
+  └──       goto #3 if not %4                            │     
+  2 ─ %6  = π (%1, Float32)                              │     
+  │   %7  = π (%1, Float32)                              │     
+  │   %8  = Base.add_float(%6, %7)::Float32              │╻     +
+  └──       goto #9                                      │     
+  3 ─ ...     
+  8 ─ %29 = π (%1, Int32)                                │     
+  │   %30 = π (%1, Int32)                                │     
+  │   %31 = Base.add_int(%29, %30)::Int32                │╻     +
+  └──       goto #9                                      │     
+  9 ┄ %33 = φ (#2 => %8, #4 => %17, #6 => %26, #8 => %31)::Union{Filoat32, Int32}
+  └──       return %33                                   │     
+   => Union{Float32, Int32}                                    
+```
+
+---
+
+# How Tos
+
+---
+
+## How to replace an instruction
+
+```julia
+inst = ir[SSAValue(1)]
+inst[:stmt] = ...  # new statement here
+inst[:typ] =  # if the know type put it here. OR: put `Any` and:
+inst[:flag] |= Core.Compiler.IR_FLAG_REFINED  # mark for type inference
+```
+Then make sure to (re-)run type inference after.
+(Or it will work but be really slow)
+
+---
+
+## How do I delete an instruction?
+Functionally there is no reason to actually delete instructions -- that would require renumbering the SSAValues, which is expensive and if you are doing it best done in batch (more on that later).
+
+Instead set it to `nothing` which will be trivially optimized out as an unusued literal
+
+```julia
+inst = ir[SSAValue(ii)]
+inst[:stmt] = nothing
+inst[:typ] = Nothing
+```
 
 
 ---
+
+## How do I insert an instruction
+
+**TODO:**
+
+Often if it is nontrivial to express as a single statement,
+you can instead define a little local function in your transform code then insert reference to that function (as a literal)
+
+---
+
+
+## How do I run the compiler pipeline manually?
+
+---
+
+## How do I configure the optimizer? How do I configure inference?
+
+
+---
+
+## What is a custom intrinsic?
+For our purpose a custom intrinsic is something that
+1. has special handling by our custom pass
+2. doesn't end up in the final code after our passes are done
+
+Keno and Shuhei's talk should cover this in more detail.
+Since a major use of custom intrinsics is to push things into a custom latice during abstract interpretation.
+
+## How do I define a custom intrinsic?
+We can simply use a function that does nothing.
+We just need to ensure that no earlier optimize pass removes it,
+e.g. via inlining and seeing it is effect free.
+
+**TODO** copy example from DAECompiler
+
+
+
 
 
