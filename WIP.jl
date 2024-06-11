@@ -55,7 +55,8 @@ function infer_ir!(ir, interp::CC.AbstractInterpreter, mi::CC.MethodInstance)
     method_info = CC.MethodInfo(#=propagate_inbounds=#true, nothing)
     min_world = world = CC.get_world_counter(interp)
     max_world = Base.get_world_counter()
-    irsv = CC.IRInterpretationState(interp, method_info, ir, mi, ir.argtypes, world, min_world, max_world)
+    spec_types = ir.argtypes
+    irsv = CC.IRInterpretationState(interp, method_info, ir, mi, spec_types, world, min_world, max_world)
     rt = CC._ir_abstract_constant_propagation(interp, irsv)
     return ir
 end
@@ -67,7 +68,7 @@ function get_toplevel_mi_from_ir(ir, _module::Module)
     mi.specTypes = Tuple{map(CC.widenconst, ir.argtypes)...}
     mi.def = _module
     return mi
-end
+end 
 
 # ╔═╡ 3b804335-43f0-48e6-a5d7-e93f4267ab73
 

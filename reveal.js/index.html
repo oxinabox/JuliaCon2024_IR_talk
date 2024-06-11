@@ -16,8 +16,8 @@
 		<style type="text/css">
 			p { text-align: left; }
 
-			pre {
-				width: unset !important;
+			.code-wrapper {
+				width: max-content !important;
 			}
 			.reveal pre code {
 				max-height: unset !important;
@@ -217,6 +217,7 @@ But in the `IRCode` we also have `Expr(:invoke, method_instance, f, args...)`
 - Invoke is used for static dispatches
 
 Running type inference will replace type-known calls with invokes.
+So generally insert calls, and let type-inference work it out.
 
 ---
 
@@ -340,10 +341,11 @@ julia> Base.code_ircode(bar) |> only
 ```julia
 inst = ir[SSAValue(1)]
 inst[:stmt] = ...  # new statement here
+ir[idx][:info] = CC.NoCallInfo()
 inst[:typ] =  # if the know type put it here. OR: put `Any` and:
 inst[:flag] |= Core.Compiler.IR_FLAG_REFINED  # mark for type inference
 ```
-Then make sure to (re-)run type inference after.
+Then make sure to (re-)run type inference after, if you didn't put in a type.
 (Or it will work but be really slow)
 
 ---
@@ -364,7 +366,20 @@ inst[:typ] = Nothing
 
 ## How do I insert an instruction
 
-**TODO:**
+```julia
+insert_node!(
+	ir::Core.Compiler.IRCode,
+	pos::Core.SSAValue,
+	newinst::Core.Compiler.NewInstruction,
+	attach_after::Bool)
+
+NewInstruction(
+	stmt, type,
+	info::Core.Compiler.CallInfo == NoCallInfo()
+	line=nothing  # copy line above
+	flag=nothing  # automatically determined from context
+)
+```
 
 Often if it is nontrivial to express as a single statement,
 you can instead define a little local function in your transform code then insert reference to that function (as a literal)
@@ -372,12 +387,88 @@ you can instead define a little local function in your transform code then inser
 ---
 
 
-## How do I run the compiler pipeline manually?
+
+## How do I run the full compiler pipeline manually?
 
 ---
 
-## How do I configure the optimizer? How do I configure inference?
+## How do I run inference?
 
+```julia
+"run type inference and constant propagation on the ir"
+function infer_ir!(
+	ir::CC.IRCode,
+	interp::CC.AbstractInterpreter, 
+	mi::CC.MethodInstance
+)
+    
+	method_info = CC.MethodInfo(#=propagate_inbounds=#true, nothing)
+    min_world = world = CC.get_world_counter(interp)
+    max_world = Base.get_world_counter()
+    spec_types = ir.argtypes
+    irsv = CC.IRInterpretationState(
+		interp, method_info, ir, mi, spec_types,
+		world, min_world, max_world
+	)
+    rt = CC._ir_abstract_constant_propagation(interp, irsv)
+    return ir
+end
+```
+---
+## How do i get an interpreter?
+If doing custom abstract interpretation (see Keno's talk) you already have one.
+If not:
+```julia
+CC.NativeInterpreter(;
+	inf_params::InferenceParameters, opt_params::OptimizationParameters
+)
+```
+
+<div class="r-stack">
+<div class="fragment current-visible">
+
+`InferenceParameters(; kwargs...)` 
+- `max_methods = 3`
+- `max_union_splitting = 4`
+- `max_apply_union_enum = 8`
+- `max_tuple_splat = 32`
+- `tuple_complexity_limit_depth = 3`
+
+</div>
+
+<div class="fragment">
+
+`OptimizationParameters(; kwargs...)`
+- `inlining::Bool = inlining_enabled()`
+- `inline_cost_threshold = 100`
+- `max_tuple_splat = 32`
+- `compilesig_invokes = true`
+- `assume_fatal_throw = false`
+
+</div>
+</div>
+
+notes:
+both OptimizationParameters and InferenceParameters have really good docstrings.
+Unlike most things.
+
+---
+
+## How do I get a fresh method instance for inference?
+
+```julia
+function get_toplevel_mi_from_ir(ir::CC.IRCode, _module::Module)
+    mi = ccall(:jl_new_method_instance_uninit,Ref{CC.MethodInstance},())
+    mi.specTypes = Tuple{map(CC.widenconst, ir.argtypes)...}
+    mi.def = _module
+    return mi
+end 
+```
+
+notes:
+explain `CC.widenconst` drops extra lattices.
+As name suggest the most common extra lattice is the constant lattice.
+Which will show up in IR.argtypes for the function object.
 
 ---
 
@@ -415,7 +506,7 @@ e.g. via inlining and seeing it is effect free.
 				hash: true,
 				margin: 0.1,
 //				width: '90%',
-				height: '50%',
+//				height: '50%',
 
 				// Learn about plugins: https://revealjs.com/plugins/
 				plugins: [ RevealMarkdown, RevealHighlight, RevealNotes ]
