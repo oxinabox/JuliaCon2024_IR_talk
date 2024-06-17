@@ -39,10 +39,14 @@ JuliaHub
 
 ---
 
-## This conference is much easier to get to than on in the US
-Only 20 hours in transit,
-not 40 hours.
+## This conference is much easier to get to
+<img src="assets/map.png" alt="map of flight Perth to Amsterdam stopping in Singapore." style="height:400px;">
+
+Only 20 hours in transit, not 40 hours.  
+Only 1/3rd the way round the would, not half.  
 Much less remote than Boston.
+
+
 
 ---
 
@@ -252,6 +256,9 @@ julia> Base.code_ircode(qux) |> first
 ## Control Flow Graph (CFG)
 We can extract the possible paths through the basic blocks as a graph.
 
+<div>
+<div style="display: inline-block; width: 50%;">
+
 ```julia-repl
 julia> ir.cfg
 CFG with 3 blocks:
@@ -273,7 +280,13 @@ julia> ir.cfg.blocks[2].succs
 1-element Vector{Int64}:
 	3
 ```
-	**TODO: use IRViz.jl here?**
+
+</div>
+
+<div style="display: inline-block; width: 49%">
+	<img src="assets/CFG.png" alt="diagram of the cfg">
+</div>
+</div>
 
 ---
 
