@@ -312,7 +312,7 @@ Almost opposite of a `goto` -- `if_came_from`.
 ## Pi nodes
 These are like type-assertions.
 They are facts that are certain to be true, so the compiler can use them.
-They are often inserted by type assertions or banching on types, etc.
+They are often inserted by type assertions or branching on types, etc.
 For example they are inserted during union-splitting
 
 ```julia=-repl
@@ -338,7 +338,7 @@ julia> Base.code_ircode(bar) |> only
 	│   %30 = π (%1, Int32)                                │     
 	│   %31 = Base.add_int(%29, %30)::Int32                │╻     +
 	└──       goto #9                                      │     
-	9 ┄ %33 = φ (#2 => %8, #4 => %17, #6 => %26, #8 => %31)::Union{Filoat32, Int32}
+	9 ┄ %33 = φ (#2 => %8, #4 => %17, #6 => %26, #8 => %31)::Union{Float32, Int32}
 	└──       return %33                                   │     
 	=> Union{Float32, Int32}                                    
 ```
@@ -403,6 +403,11 @@ you can instead define a little local function in your transform code then inser
 
 ## How do I run the full compiler pipeline manually?
 
+1. Get + transform or create IR 
+2. Run inference (optional)
+3. run optimization (optional)
+4. Give to `OpaqueClosure` to make compile
+
 ---
 
 ## How do I run inference?
@@ -428,7 +433,7 @@ function infer_ir!(
 end
 ```
 ---
-## How do i get an interpreter?
+## How do I get an interpreter?
 If doing custom abstract interpretation (see Keno's talk) you already have one.
 If not:
 ```julia
@@ -491,7 +496,7 @@ For our purpose a custom intrinsic is something that
 2. doesn't end up in the final code after our passes are done
 
 Keno and Shuhei's talk should cover this in more detail.
-Since a major use of custom intrinsics is to push things into a custom latice during abstract interpretation.
+Since a major use of custom intrinsics is to push things into a custom lattice during abstract interpretation.
 
 ---
 
@@ -500,7 +505,37 @@ We can simply use a function that does nothing.
 We just need to ensure that no earlier optimize pass removes it,
 e.g. via inlining and seeing it is effect free.
 
-**TODO** copy example from DAECompiler
+```
+@noinline function compile_datetime()
+	Base.donotdelete(data)
+end
+```
+
+note:
+You may also want to assume_effects on it, depending how you want to interact with it in earlier passes.
+DAECompiler puts `inferencebarriers` on it sometimes.
+
+---
+
+## How do I use a custom intrinsic
+
+```julia
+function is_known_invoke(@nospecialize(x), @nospecialize(func), ir::Union{IRCode,IncrementalCompact})
+    isexpr(x, :invoke) || return false
+    ft = argextype(x.args[2], ir)
+    return ft <: func
+end
+
+for ii in 1:length(ir.stmts)
+	inst = ir[SSAValue(ii)]
+	if is_known_invoke(inst[:stmt], compile_datetime)
+		inst[:stmt] = Dates.now()
+		inst[typ] = DateTime
+	end
+end
+```
+
+---
 
 					</textarea>
 				</section>
