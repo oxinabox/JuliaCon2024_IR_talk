@@ -4,7 +4,7 @@
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
-		<title>reveal.js</title>
+		<title>Adventures in IR</title>
 
 		<link rel="stylesheet" href="dist/reset.css">
 		<link rel="stylesheet" href="dist/reveal.css">
@@ -98,18 +98,17 @@ But the general content and conception of this talk should remain useful.
 ---
 
 ## A lot of the utilities are not in the Base namespace
-When you do `for` that lowers to calls to `iterate` in the current namespace.
-Similar for `getindex` and `setindex`, and indexing with `begin` and `end`.
-But `Core` is a different namespace to `Base`.
-So some things are broken if you are using from normal julia code which is in main with Base exporting them.
-But you can do a manual method merge across the namespaces.
-And some (like `getindex(::IRCode, ::SSAValue)` after Julia v1.11.0-DEV.258) are already defined.
+You need to manual method merge from `Core.Compiler` into `Base` things like:
+`iterate`, `length`, `getindex`, `setindex!`, `lastindex`
+and maybe tweak definitions
 
 For example:
 ```julia
 const CC = Core.Compiler
 Base.lastindex(x::CC.InstructionStream) = CC.length(x)
 ```
+Check Diffractor's `compiler_utils.jl` for details.
+
 
 ---
 
@@ -118,30 +117,52 @@ You are likely familiar with the compilation pipeline of:
 
 1. Source code
 2. Parsing -> AST
-	- Macros run here
 3. Lowering -> Untyped IR
-	- Cassette, Zygote and JuliaInterpetter run here
 4. Type Inference -> Typed IR 
-	- loop here running julia optimization passes
-	- This stage is what this talk is about
 5. Code Generation -> LLVM IR
-	- loop here running LLVM optimization passes
-	- Enzyme, and GPU Compiler run here.
 6. Assembling -> Machine Code
+
+note:
+talk about what tools run where
 
 ---
 
-## Let's zoom-in on step 4: the Typed IR
+## ⌨️ Let's zoom-in on the Typed IR
 If you have used `@code_typed` you get back typed IR, as a `CodeInfo` object.
-It's not quiet SSA because it has slots (basically variables).
 
-You want a `IRCode` object, which you can get from `Base.code_ircode`.
+For this talk we actually want a `IRCode` object, which you can get from `Base.code_ircode`.
 This is the representation that is used with in the optimizer.
-it is a true SSA, and it is also enriched with the CFG.
-For display purposes it can be converted back to a `CodeInfo` object.
+It is a true SSA, and it is also enriched with the CFG.
 
+
+note:
 This is what is actually created and manipulated during this step,
 and what almost all Julia's own optimization passes are running on.
+
+---
+
+## 👀 Look at this IRCode
+
+```julia-repl
+julia> function qux()
+		x=0.0
+		if (@noinline rand(Bool))
+			x += 10(@noinline rand())
+		end
+		return x
+		end;
+
+julia> Base.code_ircode(qux) |> first
+3 1 ─ %1 = invoke Main.rand(Main.Bool::Type{Bool})::Bool            │ 
+	└──      goto #3 if not %1                                        │ 
+4 2 ─ %3 = invoke Main.rand()::Float64                              │ 
+	│   %4 = Base.mul_float(10.0, %3)::Float64                        │╻ *
+	└── %5 = Base.add_float(0.0, %4)::Float64                         │╻ +
+6 3 ┄ %6 = φ (#2 => %5, #1 => 0.0)::Float64                         │ 
+	└──      return %6                                                │ 
+	=> Float64 
+```
+
 
 ---
 
@@ -149,7 +170,7 @@ and what almost all Julia's own optimization passes are running on.
 
 ---
 
-## Instrucions
+## Instructions
 We can think of IR code as a list of instructions.
 
 For the `ii`th instruction we have:
@@ -161,7 +182,8 @@ ir[SSAValue(ii)][:flag] # flags
 # + some other stuff
 ```
 
-the `:stmt` can hold a `Expr`, a `SSAValue`, an `Argument` or a literal
+the `:stmt` can hold a `Expr`, a `SSAValue`, an `Argument` or a literal,
+or a few other things like gotos, `ReturnNode`s.
 
 ---
 
@@ -211,6 +233,65 @@ julia> Base.code_ircode(+, (Int, Int),) |> only
 87 1 ─ %1 = Base.add_int(_2, _3)::Int64                  │
 	└──      return %1                                    │
 	=> Int64           
+```
+---
+
+## Literals
+
+Obviously, we have literals that are things like `1.0` etc.
+But more generally we can insert *any* value into the IR.
+Including complicated structures.
+
+```julia-repl
+julia> @eval foo() = $([1, 2]);
+
+julia> Base.code_ircode(foo) |> first
+ 1 ─     return [1, 2]                                                                                                                           │
+  => Vector{Int64}                                                                                                                                
+```
+
+This can be weird if it is mutated.
+
+This is very useful when constructing manually
+
+---
+
+#### Without literals:
+
+```julia-repl
+julia> bar() = [1, 2];
+
+julia> Base.code_ircode(bar) |> first
+1 1 ─ %1  = $(Expr(:foreigncall, :(:jl_alloc_genericmemory), Ref{Memory{Int64}}, svec(Any, Int64), 0, :(:ccall), Memory{Int64}, 2, 2))::Memory{Int64}
+  │   %2  = Core.memoryref(%1)::MemoryRef{Int64}                                                                             ││╻   Array
+  └── %3  = %new(Vector{Int64}, %2, (2,))::Vector{Int64}                                                                     │││ 
+  2 ┄ %4  = φ (#1 => 1, #6 => %15)::Int64                                                                                    │╻   vect
+  │   %5  = φ (#1 => 1, #6 => %16)::Int64                                                                                    ││  
+  │   %6  = Base.getfield((1, 2), %4, false)::Int64                                                                          ││╻   __safe_getindex
+  │   %7  = Base.getfield(%3, :ref)::MemoryRef{Int64}                                                                        │││╻   getproperty
+  │   %8  = Base.memoryref(%7, %4, false)::MemoryRef{Int64}                                                                  │││ 
+  │         Base.memoryrefset!(%8, %6, :not_atomic, false)::Int64                                                            │││ 
+  │   %10 = (%5 === 2)::Bool                                                                                                 ││╻╷  iterate
+  └──       goto #4 if not %10                                                                                               │││ 
+  3 ─       goto #5                                                                                                          │││ 
+  4 ─ %13 = Base.add_int(%5, 1)::Int64                                                                                       │││╻   +
+  └──       goto #5                                                                                                          ││││
+  5 ┄ %15 = φ (#4 => %13)::Int64                                                                                             ││  
+  │   %16 = φ (#4 => %13)::Int64                                                                                             ││  
+  │   %17 = φ (#3 => true, #4 => false)::Bool                                                                                ││  
+  │   %18 = Base.not_int(%17)::Bool                                                                                          ││  
+  └──       goto #7 if not %18                                                                                               ││  
+  6 ─       goto #2                                                                                                          ││  
+  7 ─       goto #8                                                                                                          ││  
+  8 ─       return %3                                                                                                        ││  
+   => Vector{Int64}                                                                                                              
+```
+
+note:
+this is just a lot of code, you don;t want that to have to run at runtime
+and you definitely don't want to generate that by hand.
+But even when you have to there is a cool trick
+
 ```
 
 ---
@@ -402,7 +483,31 @@ you can instead define a little local function in your transform code then inser
 
 ---
 
-TODO Explain New IR pending and compact! Here
+## additions are only pending til you `compact!`
+
+<pre><font color="#4E9A06"><b>julia&gt; </b></font>foo() = 10;
+	
+	<font color="#4E9A06"><b>julia&gt; </b></font>ir, _ = Base.code_ircode(foo) |&gt; first
+	<font color="#88807C"> </font>1 ─     return 10                                                                                                                               <font color="#88807C">│</font>
+	<font color="#88807C"> </font> =&gt; Int64                                                                                                                                       <font color="#88807C"> </font>
+	
+	<font color="#4E9A06"><b>julia&gt; </b></font>CC.insert_node!(ir, CC.SSAValue(1), 
+		   CC.NewInstruction(Expr(:call, println, &quot;hi&quot;), Any))
+	:(%2)
+	
+	<font color="#4E9A06"><b>julia&gt; </b></font>ir
+	<font color="#88807C"> </font>1 ─ <font color="#4E9A06">    (println)(&quot;hi&quot;)</font><font color="#88807C">::Any</font>                                                                                                                    <font color="#88807C">│</font>
+	<font color="#88807C"> </font>└──     return 10                                                                                                                               <font color="#88807C"> </font>
+	<font color="#88807C"> </font>                                                                                                                                                <font color="#88807C"> </font>
+	
+	<font color="#4E9A06"><b>julia&gt; </b></font>ir = CC.compact!(ir)
+	<font color="#88807C"> </font>1 ─     (println)(&quot;hi&quot;)<font color="#88807C">::Any</font>                                                                                                                    <font color="#88807C">│</font>
+	<font color="#88807C"> </font>└──     return 10                                                                                                                               <font color="#88807C">│</font>
+</pre>
+
+---
+
+TODO:
 and IncrementalCompact
 
 ---
@@ -414,6 +519,11 @@ and IncrementalCompact
 2. Run inference (optional)
 3. run optimization (optional)
 4. Give to `OpaqueClosure` to make compile
+
+note:
+You an just pass the IR stright to an OpaqueClosure (at any stage)
+but it will be heckin' slow.
+Especially without inference.
 
 ---
 
@@ -497,6 +607,39 @@ Which will show up in IR.argtypes for the function object.
 
 ---
 
+## 🥅 Bringing it all together: compiling IR manually
+
+
+```julia
+function compile(ir, intepr::CC.AbstractInterpreter, _module=@__MODULE__)
+	mi = get_toplevel_mi_from_ir(ir, _module);
+	ir = infer_ir!(ir, interp, mi)
+
+	# Optional: run some optimization passes (these have docstrings)
+	inline_state = Core.Compiler.InliningState(interp)
+	ir = Core.Compiler.ssa_inlining_pass!(ir, inline_state, #=propagate_inbounds=#true)
+	ir = Core.Compiler.compact!(ir)
+
+	ir = Core.Compiler.sroa_pass!(ir, inline_state)
+	ir = Core.Compiler.adce_pass!(ir, inline_state)
+	ir = Core.Compiler.compact!(ir)
+
+	# optional but without checking you get segfaults easily.
+	Core.Compiler.verify_ir(ir)
+
+	# Bundle this up into something that can be executed
+	return Core.OpaqueClosure(ir; do_compile=true)  
+end
+```
+
+note:
+SROA is Scalar Replacement of Aggregates
+Basically turning some structs back into just their fields.
+
+ADCE stands for Aggressive Dead Code Elimination
+
+---
+
 ## What is a custom intrinsic?
 For our purpose a custom intrinsic is something that
 1. has special handling by our custom pass
@@ -555,17 +698,59 @@ Here we are just replacing it with a value computed at compile time.
 But we could do much more. 
 ---
 
+## 🕵️‍♀️ Debugging code segfaulting (1)
+
+Eyeball it
+
+<pre><font color="#4E9A06"><b>julia&gt; </b></font>foo() = 10
+	foo (generic function with 3 methods)
+	
+	<font color="#4E9A06"><b>julia&gt; </b></font>ir, _ = Base.code_ircode(foo) |&gt; first
+	<font color="#88807C"> </font>1 ─     return 10                                                                                                                               <font color="#88807C">│</font>
+	<font color="#88807C"> </font> =&gt; Int64                                                                                                                                       <font color="#88807C"> </font>
+	
+	<font color="#4E9A06"><b>julia&gt; </b></font>CC.insert_node!(ir, CC.SSAValue(1), 
+		CC.NewInstruction(CC.SSAValue(3), Any))
+	:(%2)
+	
+	<font color="#4E9A06"><b>julia&gt; </b></font>ir
+	<font color="#88807C"> </font>1 ─ <font color="#4E9A06">     </font><font color="#CC0000">%3</font><font color="#88807C">::Any</font>                                                                                                                                <font color="#88807C">│</font>
+	<font color="#88807C"> </font>└──      return 10                                                                                                                              <font color="#88807C"> </font>
+	<font color="#88807C"> </font>                                                                                                                                                <font color="#88807C"> </font>
+</pre>
+
+---
+
+## 🕵️‍♀️ Debugging code segfaulting (2)
+
+Ask `verify_ir(ir)` which asserts all the subtle assumptions the compiler makes.  
+A good idea to call this in all your compilation pipelines.
+
+
+## 🕵️‍♀️ Debugging code segfaulting (3)
+
+Check in particular you are not modifying the `ir` directly, while also working with it via `IncrementalCompact`.
+
+Run julia in `gdb`. (beyond the scope of this talk)
+
+note:
+I would really like someone to run a talk on running julia in GDB
+
+
+
+
+
+---
+
+
 # Conclusion
 
 ---
 
 ## What can you now do:
-
+ - understand the optimization part of compilation pipeline really well
+ - write typed IR transforms using the compilers own utilities
  - Fun Challenge: You can write a function decorator macro that does a IR Transform of your choice on the function it decorates
-
----
-
-## Summary
 
 
 
