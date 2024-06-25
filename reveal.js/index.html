@@ -67,8 +67,7 @@ It's also used for Will Tebbut's Tapir.jl reverse mode AD.
 ## 💡 Why would I want to do this?
 
 - Run different optimization pipeline 
-	- Disable inlining
-	- Allow union splitting with more than 4 elements in the union
+	- e.g. Allow union splitting with more than 4 elements in the union
 - Generate multiple functions from 1 definition
 	- DAECompile generates about a dozen different functions like Jacobians and callbacks from a single function definition.
 	- This kinda thing generally requires custom intrinsics.
@@ -78,12 +77,12 @@ It's also used for Will Tebbut's Tapir.jl reverse mode AD.
 ## ⚠ A warning: this is unstable internals
 
 This is so far away from a public API.
-We are in the deep intercontinential ocean.
+We are in the deep intercontinental ocean.
 The light of god can not reach you here.
 
 
 Various bits of it change fairly often.
-This talk is with reference to v1.12.0-DEV.469.
+This talk is with reference to **v1.12.0-DEV.469**.
 
 note:
 I suggest looking in Diffractor's source for the various version branches.
@@ -128,14 +127,16 @@ talk about what tools run where
 ---
 
 ## ⌨️ Let's zoom-in on the Typed IR
-If you have used `@code_typed` you get back typed IR, as a `CodeInfo` object.
+Richer than AST or lowered IR, as those are just lexical transforms of text.
+We have semantic information like types.
 
+If you have used `@code_typed` you get back typed IR, as a `CodeInfo` object.
 For this talk we actually want a `IRCode` object, which you can get from `Base.code_ircode`.
-This is the representation that is used with in the optimizer.
-It is a true SSA, and it is also enriched with the CFG.
 
 
 note:
+This is the representation that is used with in the optimizer.
+It is a true SSA, and it is also enriched with the CFG.
 This is what is actually created and manipulated during this step,
 and what almost all Julia's own optimization passes are running on.
 
@@ -177,11 +178,13 @@ For the `ii`th instruction we have:
 
 ```julia
 ir[SSAValue(ii)][:stmt]  # The expression
-ir[SSAValue(ii)][:typ]   # the lattices (including type lattice)
+ir[SSAValue(ii)][:type]   # the lattices (including type lattice)
 ir[SSAValue(ii)][:flag] # flags
 # + some other stuff
 ```
+Notice we use `[:stmt]` not `.stmt`, the fields are not nice.
 
+note:
 the `:stmt` can hold a `Expr`, a `SSAValue`, an `Argument` or a literal,
 or a few other things like gotos, `ReturnNode`s.
 
@@ -190,7 +193,7 @@ or a few other things like gotos, `ReturnNode`s.
 ## Expr
 Broadly speaking inside SSA IR an Expr is not so different from in the AST.
 But it is restricted.
-Most significantly it can't be nested, as it is **Single Statement** Assigment.
+Most significantly it can't be nested, as it is **Single Statement Assigment**.
 It can only contain `SSAValue`s, `Argument`s and literals.
 
 
@@ -224,7 +227,7 @@ julia> Base.code_ircode(foo, Tuple{})
 
 ## Arguments
 An `Argument`, written `_1`, `_2`,`_3` etc represent the arguments to the functions.
-Functionally they are much like `SSAValue`s but without instructions assoicated with them
+Functionally they are much like `SSAValue`s but without instructions associated with them
 `_1` is the function object itself, so its first argument is `_2`
 
 
@@ -238,7 +241,7 @@ julia> Base.code_ircode(+, (Int, Int),) |> only
 
 ## Literals
 
-Obviously, we have literals that are things like `1.0` etc.
+Obviously, we have literals that are things like `1.0`, `:c` etc.
 But more generally we can insert *any* value into the IR.
 Including complicated structures.
 
@@ -383,51 +386,16 @@ For example
 ```
 
 says to set `%33` to:
-	- `%8` if we came from `#2`
-	- `%17` if we came from `#4`
-	- `%26` if we came from `#6`
-	- `%31` if we came from `#8`
+- `%8` if we came from `#2`
+- `%17` if we came from `#4`
+- `%26` if we came from `#6`
+- `%31` if we came from `#8`
 
 They are weird little time-reversed friends.
 Almost opposite of a `goto` -- `if_came_from`.
 
 ---
 
-## Pi nodes
-These are like type-assertions.
-They are facts that are certain to be true, so the compiler can use them.
-They are often inserted by type assertions or branching on types, etc.
-For example they are inserted during union-splitting
-
-```julia=-repl
-julia> int32_or_float32() = rand((rand() > 0.5 ? Int32 : Float32));
-
-julia> function bar()
-		a = @noinline int32_or_float32()
-		return a + a
-		end;
-
-julia> Base.code_ircode(bar) |> only
-2 1 ─ %1  = invoke Main.int32_or_float32()::Union{Float32, Int32}
-3 │   %2  = (isa)(%1, Float32)::Bool                     │     
-	│   %3  = (isa)(%1, Float32)::Bool                     │     
-	│   %4  = (Core.Intrinsics.and_int)(%2, %3)::Bool      │     
-	└──       goto #3 if not %4                            │     
-	2 ─ %6  = π (%1, Float32)                              │     
-	│   %7  = π (%1, Float32)                              │     
-	│   %8  = Base.add_float(%6, %7)::Float32              │╻     +
-	└──       goto #9                                      │     
-	3 ─ ...     
-	8 ─ %29 = π (%1, Int32)                                │     
-	│   %30 = π (%1, Int32)                                │     
-	│   %31 = Base.add_int(%29, %30)::Int32                │╻     +
-	└──       goto #9                                      │     
-	9 ┄ %33 = φ (#2 => %8, #4 => %17, #6 => %26, #8 => %31)::Union{Float32, Int32}
-	└──       return %33                                   │     
-	=> Union{Float32, Int32}                                    
-```
-
----
 
 # How Tos
 
@@ -439,7 +407,7 @@ julia> Base.code_ircode(bar) |> only
 inst = ir[SSAValue(1)]
 inst[:stmt] = ...  # new statement here
 ir[idx][:info] = CC.NoCallInfo()
-inst[:typ] =  # if the know type put it here. OR: put `Any` and:
+inst[:type] =  # if the know type put it here. OR: put `Any` and:
 inst[:flag] |= Core.Compiler.IR_FLAG_REFINED  # mark for type inference
 ```
 Then make sure to (re-)run type inference after, if you didn't put in a type.
@@ -455,7 +423,7 @@ Instead set it to `nothing` which will be trivially optimized out as an unusued 
 ```julia
 inst = ir[SSAValue(ii)]
 inst[:stmt] = nothing
-inst[:typ] = Nothing
+inst[:type] = Nothing
 ```
 
 
@@ -507,10 +475,74 @@ you can instead define a little local function in your transform code then inser
 
 ---
 
-TODO:
-and IncrementalCompact
+## IncrementalCompact
+`CC.IncrementalCompact` is more powerful tool for writing IR passes.  
+It can consume IR with pending additions and as you iterate it it compacts.  
+However, its also a bit more fiddly and we do not have time too cover it.  
 
 ---
+
+---
+
+## What is a custom intrinsic?
+For our purpose a custom intrinsic is something that
+1. has special handling by our custom pass
+2. doesn't end up in the final code after our passes are done
+
+Keno and Shuhei's talk should cover this in more detail.
+Since a major use of custom intrinsics is to push things into a custom lattice during abstract interpretation.
+
+---
+
+## How do I define a custom intrinsic?
+We can simply use a function that does nothing.
+We just need to ensure that no earlier optimize pass removes it,
+e.g. via inlining and seeing it is effect free.
+
+```julia
+@noinline function @assume_effects :nothrow :effect_free compile_datetime()
+	Base.compilerbarrier(:const, nothing)
+end
+```
+
+note:
+the noinline makes sure you can still find the function object, because its content isn't just inlined
+
+assume_effects should be set to mimic the effects of what you will replace it with
+which often is removal and doing something else so `:nothrow :effect_free` are correct.
+
+compilerbarrier(:const, data) stops this being constant folded away.
+It has a good doc string.
+
+Sometimes you might need `Base.donotdelete` as well.
+Which prevents it being dead code eliminated from being in unreachable branches etc.
+But only if you want your intrinsic to not follow control flow rules.
+
+
+---
+
+## How do I use a custom intrinsic?
+
+```julia
+for ii in 1:length(ir.stmts)
+	inst = ir[SSAValue(ii)]
+	stmt = inst[:stmt]
+	if (Meta.isexpr(stmt, :invoke, 2)
+		&& CC.singleton_type(CC.argextype(stmt.args[2])) == compile_datetime)
+		
+		inst[:stmt] = Dates.now()
+		inst[:type] = DateTime
+	end
+end
+```
+
+note:
+You write a pass that checks for it and does something.
+Here we are just replacing it with a value computed at compile time.
+But we could do much more. 
+---
+
+
 
 
 ## How do I run the full compiler pipeline manually?
@@ -518,7 +550,7 @@ and IncrementalCompact
 1. Get + transform or create IR 
 2. Run inference (optional)
 3. run optimization (optional)
-4. Give to `OpaqueClosure` to make compile
+4. Give to `OpaqueClosure` to compile into executable code
 
 note:
 You an just pass the IR stright to an OpaqueClosure (at any stage)
@@ -638,65 +670,6 @@ Basically turning some structs back into just their fields.
 
 ADCE stands for Aggressive Dead Code Elimination
 
----
-
-## What is a custom intrinsic?
-For our purpose a custom intrinsic is something that
-1. has special handling by our custom pass
-2. doesn't end up in the final code after our passes are done
-
-Keno and Shuhei's talk should cover this in more detail.
-Since a major use of custom intrinsics is to push things into a custom lattice during abstract interpretation.
-
----
-
-## How do I define a custom intrinsic?
-We can simply use a function that does nothing.
-We just need to ensure that no earlier optimize pass removes it,
-e.g. via inlining and seeing it is effect free.
-
-```julia
-@noinline function @assume_effects :nothrow :effect_free compile_datetime()
-	Base.compilerbarrier(:const, data)
-end
-```
-
-note:
-the noinline makes sure you can still find the function object, because its content isn't just inlined
-
-assume_effects should be set to mimic the effects of what you will replace it with
-which often is removal and doing something else so `:nothrow :effect_free` are correct.
-
-compilerbarrier(:const, data) stops this being constant folded away.
-It has a good doc string.
-
-Sometimes you might need `Base.donotdelete` as well.
-Which prevents it being dead code eliminated from being in unreachable branches etc.
-But only if you want your intrinsic to not follow control flow rules.
-
-
----
-
-## How do I use a custom intrinsic?
-
-```julia
-for ii in 1:length(ir.stmts)
-	inst = ir[SSAValue(ii)]
-	stmt = inst[:stmt]
-	if (Meta.isexpr(stmt, :invoke, 2)
-		&& CC.singleton_type(CC.argextype(stmt.args[2])) == compile_datetime)
-		
-		inst[:stmt] = Dates.now()
-		inst[:typ] = DateTime
-	end
-end
-```
-
-note:
-You write a pass that checks for it and does something.
-Here we are just replacing it with a value computed at compile time.
-But we could do much more. 
----
 
 ## 🕵️‍♀️ Debugging code segfaulting (1)
 
@@ -726,6 +699,7 @@ Eyeball it
 Ask `verify_ir(ir)` which asserts all the subtle assumptions the compiler makes.  
 A good idea to call this in all your compilation pipelines.
 
+---
 
 ## 🕵️‍♀️ Debugging code segfaulting (3)
 
@@ -735,9 +709,6 @@ Run julia in `gdb`. (beyond the scope of this talk)
 
 note:
 I would really like someone to run a talk on running julia in GDB
-
-
-
 
 
 ---
@@ -752,6 +723,48 @@ I would really like someone to run a talk on running julia in GDB
  - write typed IR transforms using the compilers own utilities
  - Fun Challenge: You can write a function decorator macro that does a IR Transform of your choice on the function it decorates
 
+
+---
+
+# Appendix
+
+---
+
+## Pi nodes
+ These are like type-assertions.
+ 
+ ```julia=-repl
+ julia> int32_or_float32() = rand((rand() > 0.5 ? Int32 : Float32));
+ 
+ julia> function bar()
+		 a = @noinline int32_or_float32()
+		 return a + a
+		 end;
+ 
+ julia> Base.code_ircode(bar) |> only
+ 2 1 ─ %1  = invoke Main.int32_or_float32()::Union{Float32, Int32}
+ 3 │   %2  = (isa)(%1, Float32)::Bool                     │     
+	 │   %3  = (isa)(%1, Float32)::Bool                     │     
+	 │   %4  = (Core.Intrinsics.and_int)(%2, %3)::Bool      │     
+	 └──       goto #3 if not %4                            │     
+	 2 ─ %6  = π (%1, Float32)                              │     
+	 │   %7  = π (%1, Float32)                              │     
+	 │   %8  = Base.add_float(%6, %7)::Float32              │╻     +
+	 └──       goto #9                                      │     
+	 3 ─ ...     
+	 8 ─ %29 = π (%1, Int32)                                │     
+	 │   %30 = π (%1, Int32)                                │     
+	 │   %31 = Base.add_int(%29, %30)::Int32                │╻     +
+	 └──       goto #9                                      │     
+	 9 ┄ %33 = φ (#2 => %8, #4 => %17, #6 => %26, #8 => %31)::Union{Float32, Int32}
+	 └──       return %33                                   │     
+	 => Union{Float32, Int32}                                    
+ ```
+ note:
+ They are facts that are certain to be true, so the compiler can use them.
+ They are often inserted by type assertions or branching on types, etc.
+ For example they are inserted during union-splitting
+ 
 
 
 					</textarea>
