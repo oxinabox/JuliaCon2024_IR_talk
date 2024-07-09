@@ -39,11 +39,11 @@ JuliaHub
 
 ---
 
-## This conference is much better located
+## 🗺️ This conference is much better located
 <img src="assets/map.png" alt="map of flight Perth to Amsterdam stopping in Singapore." style="height:500px;">
 
 note:
-Only 20 hours in transit, not 40 hours.  
+Only 24 hours in transit, not 48 hours.  
 Only 1/3rd the way round the would, not half.  
 Much less remote than Boston.
 There were even multiple routes that didn't transfer in countries where I am illegal
@@ -690,18 +690,14 @@ Eyeball it
 
 ---
 
-## 🕵️‍♀️ Debugging code segfaulting (2)
+## 🕵️‍♀️ Debugging code segfaulting
 
 Ask `verify_ir(ir)` which asserts all the subtle assumptions the compiler makes.  
 A good idea to call this in all your compilation pipelines.
 
----
-
-## 🕵️‍♀️ Debugging code segfaulting (3)
-
 Check in particular you are not modifying the `ir` directly, while also working with it via `IncrementalCompact`.
 
-Run julia in `gdb`. (beyond the scope of this talk)
+Run julia in `gdb`.
 
 note:
 I would really like someone to run a talk on running julia in GDB
