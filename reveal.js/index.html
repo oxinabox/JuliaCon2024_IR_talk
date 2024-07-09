@@ -58,9 +58,7 @@ This is about writing custom optimization passes that work using the tools that 
 
 In contrast to say IRTools.jl which reimplements analysis and modification utilities itself
 
-It one key part of DAECompiler.jl which is used in Cedar,
-and behind Diffractor's demand driven forwards mode AD.
-It's also used for Will Tebbut's Tapir.jl reverse mode AD.
+Used in DAECompiler.jl, (parts of) Diffractor.jl, Tapir.jl
 
 ---
 
@@ -96,7 +94,7 @@ But the general content and conception of this talk should remain useful.
 
 ---
 
-## A lot of the utilities are not in the Base namespace
+## 🔩 A lot of the utilities are not in the Base namespace
 You need to manual method merge from `Core.Compiler` into `Base` things like:
 `iterate`, `length`, `getindex`, `setindex!`, `lastindex`
 and maybe tweak definitions
@@ -171,7 +169,7 @@ julia> Base.code_ircode(qux) |> first
 
 ---
 
-## Instructions
+## 👩‍🏫 Instructions
 We can think of IR code as a list of instructions.
 
 For the `ii`th instruction we have:
@@ -190,7 +188,7 @@ or a few other things like gotos, `ReturnNode`s.
 
 ---
 
-## Expr
+## 💬 Expr
 Broadly speaking inside SSA IR an Expr is not so different from in the AST.
 But it is restricted.
 Most significantly it can't be nested, as it is **Single Statement Assigment**.
@@ -208,7 +206,7 @@ It can only contain `SSAValue`s, `Argument`s and literals.
 ```
 ---
 
-## SSAValues
+## 1️⃣ SSAValues
 An `SSAValue` is the value of a single statement..
 Written `%1`, `%2` etc
 
@@ -225,7 +223,7 @@ julia> Base.code_ircode(foo, Tuple{})
 
 ---
 
-## Arguments
+## 💥 Arguments
 An `Argument`, written `_1`, `_2`,`_3` etc represent the arguments to the functions.
 Functionally they are much like `SSAValue`s but without instructions associated with them
 `_1` is the function object itself, so its first argument is `_2`
@@ -239,7 +237,7 @@ julia> Base.code_ircode(+, (Int, Int),) |> only
 ```
 ---
 
-## Literals
+## 📖 Literals
 
 Obviously, we have literals that are things like `1.0`, `:c` etc.
 But more generally we can insert *any* value into the IR.
@@ -259,7 +257,7 @@ This is very useful when constructing manually
 
 ---
 
-#### Without literals:
+#### 🚳 Without literals:
 
 ```julia-repl
 julia> bar() = [1, 2];
@@ -299,7 +297,7 @@ But even when you have to there is a cool trick
 
 ---
 
-## Invokes and Calls
+## 🧙🏻‍♀️ Invokes and Calls
 
 You are familar with `Expr(:call, f, args...)` from the AST.
 But in the `IRCode` we also have `Expr(:invoke, method_instance, f, args...)`
@@ -312,7 +310,7 @@ So generally insert calls, and let type-inference work it out.
 
 ---
 
-## Basic blocks
+## 🍫 Basic blocks
 Lowering turns ASTs into flat structures.
 It remove `if-else`, `for`, `while` replacing them with `goto`s and `goto if not`s.
 However, structure still remains: you run a block of code before hiting a point that you can jump to.
@@ -340,7 +338,7 @@ julia> Base.code_ircode(qux) |> first
 
 ---
 
-## Control Flow Graph (CFG)
+## 📊 Control Flow Graph (CFG)
 We can extract the possible paths through the basic blocks as a graph.
 
 <div>
@@ -377,7 +375,7 @@ julia> ir.cfg.blocks[2].succs
 
 ---
 
-## Phi nodes
+##  π Phi nodes
 Phi nodes are kinda like `ifelse` statements, but they know which basic block was just left.
 
 For example
@@ -401,7 +399,7 @@ Almost opposite of a `goto` -- `if_came_from`.
 
 ---
 
-## How to replace an instruction
+## 🏝️ How to replace an instruction
 
 ```julia
 inst = ir[SSAValue(1)]
@@ -415,7 +413,7 @@ Then make sure to (re-)run type inference after, if you didn't put in a type.
 
 ---
 
-## How do I delete an instruction?
+## 🗑️ How do I delete an instruction?
 Functionally there is no reason to actually delete instructions -- that would require renumbering the SSAValues, which is expensive and if you are doing it best done in batch (more on that later).
 
 Instead set it to `nothing` which will be trivially optimized out as an unusued literal
@@ -429,7 +427,7 @@ inst[:type] = Nothing
 
 ---
 
-## How do I insert an instruction
+## 📩 How do I insert an instruction
 
 ```julia
 insert_node!(
@@ -451,7 +449,7 @@ you can instead define a little local function in your transform code then inser
 
 ---
 
-## additions are only pending til you `compact!`
+## 🗜️ additions are only pending til you `compact!`
 
 <pre><font color="#4E9A06"><b>julia&gt; </b></font>foo() = 10;
 	
@@ -475,26 +473,23 @@ you can instead define a little local function in your transform code then inser
 
 ---
 
-## IncrementalCompact
+## 🗜️ IncrementalCompact
 `CC.IncrementalCompact` is more powerful tool for writing IR passes.  
 It can consume IR with pending additions and as you iterate it it compacts.  
 However, its also a bit more fiddly and we do not have time too cover it.  
 
 ---
 
----
-
-## What is a custom intrinsic?
+## 🧠 What is a custom intrinsic?
 For our purpose a custom intrinsic is something that
 1. has special handling by our custom pass
 2. doesn't end up in the final code after our passes are done
 
-Keno and Shuhei's talk should cover this in more detail.
-Since a major use of custom intrinsics is to push things into a custom lattice during abstract interpretation.
+A major use of custom intrinsics is to push things into a custom lattice during abstract interpretation.
 
 ---
 
-## How do I define a custom intrinsic?
+## 🧠 How do I define a custom intrinsic?
 We can simply use a function that does nothing.
 We just need to ensure that no earlier optimize pass removes it,
 e.g. via inlining and seeing it is effect free.
@@ -521,7 +516,7 @@ But only if you want your intrinsic to not follow control flow rules.
 
 ---
 
-## How do I use a custom intrinsic?
+## 🧠 How do I use a custom intrinsic?
 
 ```julia
 for ii in 1:length(ir.stmts)
@@ -545,8 +540,8 @@ But we could do much more.
 
 
 
-## How do I run the full compiler pipeline manually?
-
+## 🏃‍♀️ How do I run the full compiler pipeline manually?
+ 
 1. Get + transform or create IR 
 2. Run inference (optional)
 3. run optimization (optional)
@@ -559,7 +554,7 @@ Especially without inference.
 
 ---
 
-## How do I run inference?
+## 🧮 How do I run inference?
 
 ```julia
 "run type inference and constant propagation on the ir"
@@ -582,7 +577,8 @@ function infer_ir!(
 end
 ```
 ---
-## How do I get an interpreter?
+
+## 🧏🏻‍♀️ How do I get an interpreter?
 If doing custom abstract interpretation (see Keno's talk) you already have one.
 If not:
 ```julia
@@ -621,7 +617,7 @@ Unlike most things.
 
 ---
 
-## How do I get a fresh method instance for inference?
+## 🥪 How do I get a fresh method instance for inference?
 
 ```julia
 function get_toplevel_mi_from_ir(ir::CC.IRCode, _module::Module)
@@ -721,7 +717,7 @@ I would really like someone to run a talk on running julia in GDB
 ## What can you now do:
  - understand the optimization part of compilation pipeline really well
  - write typed IR transforms using the compilers own utilities
- - Fun Challenge: You can write a function decorator macro that does a IR Transform of your choice on the function it decorates
+ - **Fun Challenge**: You can write a function decorator macro that does a IR Transform of your choice on the function it decorates
 
 
 ---
